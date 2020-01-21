@@ -336,6 +336,11 @@ public:
         return std::move(*this);
     }
 
+    TemplatedApp &&attach(int fd) {
+        httpContext->attach(fd);
+        return std::move(*this);
+    }
+
     TemplatedApp &&run() {
         uWS::run();
         return std::move(*this);

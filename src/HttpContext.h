@@ -377,6 +377,10 @@ public:
     us_listen_socket_t *listen(const char *host, int port, int options) {
         return us_socket_context_listen(SSL, getSocketContext(), host, port, options, sizeof(HttpResponseData<SSL>));
     }
+
+    void attach(int client_fd) {
+        us_socket_context_attach(SSL, getSocketContext(), sizeof(HttpResponseData<SSL>), client_fd);
+    }
 };
 
 }
