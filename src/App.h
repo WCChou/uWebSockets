@@ -255,6 +255,74 @@ public:
         return std::move(*this);
     }
 
+    template <typename UserData>
+    TemplatedApp &&create_ws(int fd, std::string pattern, WebSocketBehavior &&behavior) {
+        /* Don't compile if alignment rules cannot be satisfied */
+        static_assert(alignof(UserData) <= LIBUS_EXT_ALIGNMENT,
+        "µWebSockets cannot satisfy UserData alignment requirements. You need to recompile µSockets with LIBUS_EXT_ALIGNMENT adjusted accordingly.");
+
+        //auto *webSocketContext = WebSocketContext<SSL, true>::create(httpContext->getSocketContext()->loop, (us_socket_context_t *) httpContext);
+        auto *webSocketContext = WebSocketContext<SSL, true>::create(Loop::get(), (us_socket_context_t *) httpContext);
+
+        /* We need to clear this later on */
+        webSocketContexts.push_back(webSocketContext);
+
+        /* Quick fix to disable any compression if set */
+#ifdef UWS_NO_ZLIB
+        behavior.compression = uWS::DISABLED;
+#endif
+
+        /* If we are the first one to use compression, initialize it */
+        if (behavior.compression) {
+            LoopData *loopData = (LoopData *) us_loop_ext(us_socket_context_loop(SSL, webSocketContext->getSocketContext()));
+
+            /* Initialize loop's deflate inflate streams */
+            if (!loopData->zlibContext) {
+                loopData->zlibContext = new ZlibContext;
+                loopData->inflationStream = new InflationStream;
+                loopData->deflationStream = new DeflationStream;
+            }
+        }
+
+        /* Copy all handlers */
+        webSocketContext->getExt()->messageHandler = std::move(behavior.message);
+        webSocketContext->getExt()->drainHandler = std::move(behavior.drain);
+        webSocketContext->getExt()->closeHandler = std::move([closeHandler = std::move(behavior.close)](WebSocket<SSL, true> *ws, int code, std::string_view message) mutable {
+            if (closeHandler) {
+                closeHandler(ws, code, message);
+            }
+
+            /* Destruct user data after returning from close handler */
+            ((UserData *) ws->getUserData())->~UserData();
+        });
+
+        /* Copy settings */
+        webSocketContext->getExt()->maxPayloadLength = behavior.maxPayloadLength;
+        webSocketContext->getExt()->idleTimeout = behavior.idleTimeout;
+        webSocketContext->getExt()->maxBackpressure = behavior.maxBackpressure;
+
+        WebSocket<SSL, true> *webSocket = (WebSocket<SSL, true> *) us_socket_context_adopt_existing_socket(SSL,
+                    (us_socket_context_t *) webSocketContext, fd, sizeof(WebSocketData) + sizeof(UserData));
+
+        /* Update corked socket in case we got a new one (assuming we always are corked in handlers). */
+        //webSocket->AsyncSocket<SSL>::cork();
+
+        webSocket->init(false, false, "");
+
+        /* Arm idleTimeout */
+        us_socket_timeout(SSL, (us_socket_t *) webSocket, behavior.idleTimeout);
+
+        /* Default construct the UserData right before calling open handler */
+        new (webSocket->getUserData()) UserData;
+
+        /* Emit open event and start the timeout */
+        if (behavior.open) {
+            behavior.open(webSocket, nullptr);
+        }
+
+        return std::move(*this);
+    }
+
     TemplatedApp &&get(std::string pattern, fu2::unique_function<void(HttpResponse<SSL> *, HttpRequest *)> &&handler) {
         httpContext->onHttp("get", pattern, std::move(handler));
         return std::move(*this);
