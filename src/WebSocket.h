@@ -217,6 +217,10 @@ public:
         /* Is the same as publishing per websocket context */
         webSocketContextData->publish(topic, message, opCode, compress);
     }
+
+    void stop() {
+        us_socket_stop(SSL, (us_socket_t *) this);
+    }
 };
 
 }
